@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -18,10 +19,11 @@ type Api struct {
 }
 
 type Task struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	Done      bool      `json:"done"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          string    `json:"id"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	Done        bool      `json:"done"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type User struct {
@@ -34,6 +36,11 @@ type User struct {
 type ResponseUser struct {
 	Email string `json:"email"`
 	Name  string `json:"name"`
+}
+
+type UpdateObject struct {
+	Change string `json:"change"`
+	Value  any    `json:"value"`
 }
 
 func safeEncode(v any, succStatus int, w http.ResponseWriter) {
@@ -139,11 +146,6 @@ func (a *Api) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	u := ResponseUser{
-		Email: payload.Email,
-		Name:  payload.Name,
-	}
-
 	query := "INSERT INTO users (password, email, name) VALUES ($1, $2, $3)"
 
 	password := payload.Password
@@ -155,6 +157,11 @@ func (a *Api) createUser(w http.ResponseWriter, r *http.Request) {
 	if crypErr != nil {
 		http.Error(w, crypErr.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	u := ResponseUser{
+		Email: payload.Email,
+		Name:  payload.Name,
 	}
 
 	email := u.Email
@@ -188,20 +195,23 @@ func (a *Api) createTask(w http.ResponseWriter, r *http.Request) {
 	newGUID := uuid.NewString()
 
 	newTask := Task{
-		ID:        newGUID,
-		Title:     payload.Title,
-		Done:      payload.Done,
-		CreatedAt: time.Now(),
+		ID:          newGUID,
+		Title:       payload.Title,
+		Description: payload.Description,
+		Done:        payload.Done,
+		CreatedAt:   time.Now(),
 	}
 
-	insertSQL := "INSERT INTO tasks (id, title, done, created_at) VALUES ($1, $2, $3, $4);"
+	query := "INSERT INTO tasks (user_id, id, description, title, done, created_at) VALUES ($1, $2, $3, $4, $5, $6)"
 
+	user_id := r.Context().Value(UserIdKey)
 	id := newTask.ID
+	description := newTask.Description
 	title := newTask.Title
 	done := newTask.Done
 	created_at := newTask.CreatedAt
 
-	_, err := a.db.Exec(insertSQL, id, title, done, created_at)
+	_, err := a.db.Exec(query, user_id, id, description, title, done, created_at)
 
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -212,9 +222,9 @@ func (a *Api) createTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Api) getTasks(w http.ResponseWriter, r *http.Request) {
-	query := "SELECT id, title, done, created_at FROM tasks"
+	query := "SELECT id, title, description, done, created_at FROM tasks WHERE user_id= $1"
 
-	rows, err := a.db.Query(query)
+	rows, err := a.db.Query(query, r.Context().Value(UserIdKey))
 
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -226,12 +236,12 @@ func (a *Api) getTasks(w http.ResponseWriter, r *http.Request) {
 	tasks := []Task{}
 
 	for rows.Next() {
-		var t Task
+		t := Task{}
 
-		err = rows.Scan(&t.ID, &t.Title, &t.Done, &t.CreatedAt)
+		scanErr := rows.Scan(&t.ID, &t.Title, &t.Description, &t.Done, &t.CreatedAt)
 
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		if scanErr != nil {
+			http.Error(w, "Something went wrong", http.StatusInternalServerError)
 			return
 		}
 
@@ -249,13 +259,13 @@ func (a *Api) getTasks(w http.ResponseWriter, r *http.Request) {
 func (a *Api) getTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	query := "SELECT id, title, done, created_at FROM tasks WHERE id=$1"
+	query := "SELECT id, title, description, done, created_at FROM tasks WHERE id=$1 AND user_id= $2"
 
-	row := a.db.QueryRow(query, id)
+	row := a.db.QueryRow(query, id, r.Context().Value(UserIdKey))
 
 	var t Task
 
-	err := row.Scan(&t.ID, &t.Title, &t.Done, &t.CreatedAt)
+	err := row.Scan(&t.ID, &t.Title, &t.Description, &t.Done, &t.CreatedAt)
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -267,4 +277,64 @@ func (a *Api) getTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	safeEncode(t, http.StatusOK, w)
+}
+
+func (a *Api) deleteTask(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("id")
+
+	query := "DELETE FROM tasks WHERE id= $1 AND user_id= $2"
+
+	_, dbErr := a.db.Exec(query, taskID, r.Context().Value(UserIdKey))
+
+	if dbErr != nil {
+		http.Error(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+var whitelist = map[string]bool{
+	"user_id":     false,
+	"id":          false,
+	"title":       true,
+	"description": true,
+	"done":        true,
+	"created_at":  false,
+}
+
+func (a *Api) updateTask(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("id")
+
+	var update UpdateObject
+
+	jsonErr := json.NewDecoder(r.Body).Decode(&update)
+
+	if jsonErr != nil {
+		http.Error(w, jsonErr.Error(), http.StatusBadRequest)
+		return
+	}
+
+	whitelisted, ok := whitelist[update.Change]
+
+	if !ok {
+		http.Error(w, "Invalid update field", http.StatusBadRequest)
+		return
+	}
+
+	if !whitelisted {
+		http.Error(w, "Attempted to modify a read only field", http.StatusBadRequest)
+		return
+	}
+
+	query := fmt.Sprintf("UPDATE tasks SET %s = $1 WHERE id = $2 AND user_id = $3", update.Change)
+
+	_, dbErr := a.db.Exec(query, update.Value, taskID, r.Context().Value(UserIdKey))
+
+	if dbErr != nil {
+		http.Error(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }

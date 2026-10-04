@@ -1,15 +1,18 @@
-CREATE TABLE IF NOT EXISTS tasks (
-    id TEXT PRIMARY KEY,
-    title VARCHAR(100) NOT NULL,
-    done BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMPTZ DEFAULT now()
-)
-
 CREATE TABLE IF NOT EXISTS users (
     user_id SERIAL PRIMARY KEY,
     password TEXT NOT NULL,
     email VARCHAR(100) UNIQUE NOT NULL,
     name VARCHAR(25) NOT NULL
+)
+
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER REFERENCES users(user_id) NOT NULL
+    description VARCHAR(500) NOT NULL,
+    title VARCHAR(100) NOT NULL,
+    done BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT now()
 )
 
 CREATE TABLE IF NOT EXISTS sessions (

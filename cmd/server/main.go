@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -12,6 +13,10 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
 )
+
+type contextKey string
+
+const UserIdKey contextKey = "userID"
 
 var ErrSessionEnded = errors.New("Session ended, please log in again")
 
@@ -29,25 +34,23 @@ func (a *Api) authLogin(next http.Handler) http.Handler {
 			}
 		}
 
-		//Code executed before
+		// Middleware logic
 
 		cookie, err := r.Cookie("sid")
 
-		// error means the browser did not send it, therefore it must've expired.
 		if err != nil {
 			http.Error(w, ErrSessionEnded.Error(), http.StatusUnauthorized)
 			return
 		}
 
-		// give me session id from sessions, where it matches cookie.value (bless you pgsql)
-		query := "SELECT expires_at FROM sessions WHERE session_id = $1 "
+		query := "SELECT expires_at, session_user_id FROM sessions WHERE session_id = $1 "
 
 		row := a.db.QueryRow(query, cookie.Value)
 
-		var expiresAt time.Time // TIMESTAMPTZ
+		var expiresAt time.Time
+		var userID int
 
-		// check if row exists, and get the session id
-		if scanErr := row.Scan(&expiresAt); scanErr != nil {
+		if scanErr := row.Scan(&expiresAt, &userID); scanErr != nil {
 			if errors.Is(scanErr, sql.ErrNoRows) {
 				http.Error(w, ErrSessionEnded.Error(), http.StatusUnauthorized)
 			} else {
@@ -56,20 +59,14 @@ func (a *Api) authLogin(next http.Handler) http.Handler {
 			return
 		}
 
-		// So if it got to this point in the code, then the cookie exists, and there is a session ID that matches it's value.
-
 		if expiresAt.Before(time.Now()) {
 			http.Error(w, ErrSessionEnded.Error(), http.StatusUnauthorized)
 			return
 		}
 
-		// Session is valid, safe to move onto the main handler logic
+		ctx := context.WithValue(r.Context(), UserIdKey, userID)
 
-		next.ServeHTTP(w, r)
-
-		// Code executed after
-
-		// Here I can probably check for statistics about the routing, and such
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -113,6 +110,7 @@ func main() {
 	mux.HandleFunc("GET /Tasks", api.getTasks)
 
 	mux.HandleFunc("GET /Tasks/{id}", api.getTask)
+	mux.HandleFunc("DELETE /Tasks/{id}", api.deleteTask)
 
 	// Users routing
 	mux.HandleFunc("POST /Signup", api.createUser)
