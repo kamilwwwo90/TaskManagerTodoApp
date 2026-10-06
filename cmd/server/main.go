@@ -4,14 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/joho/godotenv"
 )
 
 type contextKey string
@@ -21,8 +18,8 @@ const UserIdKey contextKey = "userID"
 var ErrSessionEnded = errors.New("Session ended, please log in again")
 
 var handlerExcludeList = []string{
-	"/Signup",
-	"/Login",
+	"/signup",
+	"/login",
 }
 
 func (a *Api) authLogin(next http.Handler) http.Handler {
@@ -71,54 +68,16 @@ func (a *Api) authLogin(next http.Handler) http.Handler {
 }
 
 func main() {
-	dotenvLoadErr := godotenv.Load()
-
-	if dotenvLoadErr != nil {
-		log.Fatal("Failed to load the dot env file")
-	}
-
-	dbUser := os.Getenv("DB_USER")
-	dbPassword := os.Getenv("DB_PASSWORD")
-	dbHost := os.Getenv("DB_HOST")
-	dbPort := os.Getenv("DB_PORT")
-	dbName := os.Getenv("DB_NAME")
-
-	// postgresql://<user>:<password>@<host>:<port>/<database>
-	connString := fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", dbUser, dbPassword, dbHost, dbPort, dbName)
-
-	db, dbErr := sql.Open("pgx", connString)
-
-	if dbErr != nil {
-		log.Fatal(dbErr)
-	}
-
-	defer db.Close()
-
-	if err := db.Ping(); err != nil {
-		log.Fatal(err)
-	}
+	db := createDB()
 
 	api := Api{
 		addr: ":8081",
 		db:   db,
 	}
 
-	mux := http.NewServeMux()
+	mux := api.routes()
 
-	// Tasks routing
-	mux.HandleFunc("POST /Tasks", api.createTask)
-	mux.HandleFunc("GET /Tasks", api.getTasks)
-
-	mux.HandleFunc("GET /Tasks/{id}", api.getTask)
-	mux.HandleFunc("DELETE /Tasks/{id}", api.deleteTask)
-
-	// Users routing
-	mux.HandleFunc("POST /Signup", api.createUser)
-	mux.HandleFunc("POST /Login", api.loginUser)
-
-	wrappedMux := api.authLogin(mux)
-
-	server := http.Server{Addr: api.addr, Handler: wrappedMux}
+	server := http.Server{Addr: api.addr, Handler: mux}
 
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatal(err)

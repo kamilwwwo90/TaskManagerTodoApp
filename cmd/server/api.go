@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -43,17 +42,23 @@ type UpdateObject struct {
 	Value  any    `json:"value"`
 }
 
-func safeEncode(v any, succStatus int, w http.ResponseWriter) {
-	var buffer bytes.Buffer
+func (a *Api) routes() http.Handler {
+	mux := http.NewServeMux()
 
-	if encodingErr := json.NewEncoder(&buffer).Encode(v); encodingErr != nil {
-		http.Error(w, encodingErr.Error(), http.StatusInternalServerError)
-		return
-	}
+	// Users routing
+	mux.HandleFunc("POST /signup", a.createUser)
+	mux.HandleFunc("POST /login", a.loginUser)
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(succStatus)
-	w.Write(buffer.Bytes())
+	// Tasks routing
+	mux.HandleFunc("GET /tasks", a.getTasks)
+	mux.HandleFunc("POST /tasks", a.createTask)
+	mux.HandleFunc("GET /tasks/{id}", a.getTask)
+	mux.HandleFunc("PATCH /tasks/{id}", a.updateTask)
+	mux.HandleFunc("DELETE /tasks/{id}", a.deleteTask)
+
+	wrappedMux := a.authLogin(mux)
+
+	return wrappedMux
 }
 
 func (a *Api) loginUser(w http.ResponseWriter, r *http.Request) {
@@ -121,6 +126,39 @@ func (a *Api) loginUser(w http.ResponseWriter, r *http.Request) {
 	})
 
 	safeEncode(respUser, http.StatusOK, w)
+}
+
+func (a *Api) logoutUser(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("sid")
+
+	if err != nil {
+		http.Error(w, ErrSessionEnded.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	sessionID := cookie.Value
+
+	query := "DELETE FROM sessions WHERE session_id= $1"
+
+	_, dbErr := a.db.Exec(query, sessionID)
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "sid",
+		Value:    "",
+		MaxAge:   -1,
+		Expires:  time.Unix(0, 0),
+		HttpOnly: true,
+		Secure:   false,
+		SameSite: http.SameSiteLaxMode,
+		Path:     "/",
+	})
+
+	if dbErr != nil {
+		http.Error(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func (a *Api) createUser(w http.ResponseWriter, r *http.Request) {
@@ -284,10 +322,22 @@ func (a *Api) deleteTask(w http.ResponseWriter, r *http.Request) {
 
 	query := "DELETE FROM tasks WHERE id= $1 AND user_id= $2"
 
-	_, dbErr := a.db.Exec(query, taskID, r.Context().Value(UserIdKey))
+	result, dbErr := a.db.Exec(query, taskID, r.Context().Value(UserIdKey))
 
 	if dbErr != nil {
 		http.Error(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+
+	rows, err := result.RowsAffected()
+
+	if err != nil {
+		http.Error(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+
+	if rows == 0 {
+		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
 
