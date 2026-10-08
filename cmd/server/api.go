@@ -48,6 +48,7 @@ func (a *Api) routes() http.Handler {
 	// Users routing
 	mux.HandleFunc("POST /signup", a.createUser)
 	mux.HandleFunc("POST /login", a.loginUser)
+	mux.HandleFunc("POST /logout", a.logoutUser)
 
 	// Tasks routing
 	mux.HandleFunc("GET /tasks", a.getTasks)
@@ -69,7 +70,6 @@ func (a *Api) loginUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// fetch id, email, password, in a row where email is payload.email.
 	query := "SELECT user_id, email, password, name FROM users WHERE email= $1"
 
 	row := a.db.QueryRow(query, payload.Email)
