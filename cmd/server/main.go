@@ -31,8 +31,6 @@ func (a *Api) authLogin(next http.Handler) http.Handler {
 			}
 		}
 
-		// Middleware logic
-
 		cookie, err := r.Cookie("sid")
 
 		if err != nil {

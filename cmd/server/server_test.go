@@ -8,10 +8,6 @@ import (
 	"testing"
 )
 
-// TODO:
-
-// Create/Delete task test
-
 var testEmail = "test4@example.com"
 var testPassword = "secret12345"
 
