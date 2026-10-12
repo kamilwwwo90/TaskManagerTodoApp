@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
@@ -57,12 +59,101 @@ func createTestDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 
-	// defer
 	t.Cleanup(func() {
 		db.Close()
 	})
 
 	return db
+}
+
+func createTask(t *testing.T, title string, description string, user User) string {
+	t.Helper()
+
+	db := createTestDB(t)
+
+	defer db.Close()
+
+	api := Api{
+		addr: ":8081",
+		db:   db,
+	}
+
+	task := Task{
+		Title:       title,
+		Description: description,
+	}
+
+	jsonData, encodingErr := json.Marshal(task)
+
+	if encodingErr != nil {
+		t.Fatal(encodingErr)
+	}
+
+	cookie := renewSession(t, user)
+
+	w := httptest.NewRecorder()
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tasks", bytes.NewBuffer(jsonData))
+
+	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("Cookie", cookie)
+
+	api.routes().ServeHTTP(w, req)
+
+	resp := w.Result()
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var payload Task
+
+	decodingErr := json.NewDecoder(resp.Body).Decode(&payload)
+
+	if decodingErr != nil {
+		t.Fatal(decodingErr)
+	}
+
+	return payload.ID
+}
+
+func renewSession(t *testing.T, u User) string {
+	t.Helper()
+
+	db := createTestDB(t)
+
+	defer db.Close()
+
+	api := Api{
+		addr: ":8081",
+		db:   db,
+	}
+
+	jsonData, encodingErr := json.Marshal(u)
+
+	if encodingErr != nil {
+		t.Fatal(encodingErr)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewBuffer(jsonData))
+
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+
+	api.routes().ServeHTTP(w, req)
+
+	cookie := w.Result().Header.Get("Set-Cookie")
+
+	if cookie == "" {
+		t.Fatal("expected auth cookie")
+	}
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	return cookie
 }
 
 func safeEncode(v any, succStatus int, w http.ResponseWriter) {

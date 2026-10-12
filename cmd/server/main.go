@@ -34,7 +34,11 @@ func (a *Api) authLogin(next http.Handler) http.Handler {
 		cookie, err := r.Cookie("sid")
 
 		if err != nil {
-			http.Error(w, ErrSessionEnded.Error(), http.StatusUnauthorized)
+			if errors.Is(err, http.ErrNoCookie) {
+				http.Error(w, "No cookie", http.StatusUnauthorized)
+			} else {
+				http.Error(w, ErrSessionEnded.Error(), http.StatusUnauthorized)
+			}
 			return
 		}
 
